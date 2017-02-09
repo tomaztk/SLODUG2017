@@ -103,36 +103,41 @@ dataTest <- rxReadXdf("Digit_test.xdf")
 # or: https://blogs.technet.microsoft.com/machinelearning/2015/02/16/neural-nets-in-azure-ml-introduction-to-net/
 
 netDefinition <- '
-   const {T = true; F = false;}
+// Define constants.
+const { T = true; F = false; }
 
-  input Picture [28,28];
+// Input layer definition.
+input Picture [28, 28];
 
-  
+// First convolutional layer definition.
 hidden C1 [5 * 13^2]
-  from Picture convolve{
-    InputShape  = [28, 28];
-    UpperPad    = [ 1,  1];
-    KernelShape = [ 5,  5];
-    Stride      = [ 2,  2];
-    MapCount    = 5;
-  }
+from Picture convolve {
+InputShape  = [28, 28];
+UpperPad    = [ 1,  1];
+KernelShape = [ 5,  5];
+Stride      = [ 2,  2];
+MapCount = 5;
+}
 
-
+// Second convolutional layer definition.
 hidden C2 [50, 5, 5]
-  from C1 convolve {
-    InputShape  = [ 5, 13, 13];
-    UpperPad    = [ 1,  5,  5];
-    KernelShape = [ 1,  2,  2];
-    Stride      = [ F,  T,  T];
-    MapCount    = 10;
-  }
+from C1 convolve {
+InputShape  = [ 5, 13, 13];
+KernelShape = [ 1,  5,  5];
+Stride      = [ 1,  2,  2];
+Sharing     = [ F,  T,  T];
+MapCount = 10;
+}
 
+// Third fully connected layer definition.
 hidden H3 [100]
-  from C2 all;
+from C2 all;
 
-ouput Result [10]
-  from H3 all;
+// Output layer definition.
+output Result [10]
+from H3 all;
 '
+
 
 
 # Train the neural Network
@@ -142,13 +147,15 @@ ouput Result [10]
 #start time
 ptm <- proc.time()
 
+#GPU
 model_DNN_GPU <- rxNeuralNet(label ~.
                              ,data = dataTrain
                              ,type = "multi"
-                             ,numIterations = 30
+                             ,numIterations = 10
                              ,normalize = "no"
                              ,acceleration = "gpu" #enable this if you have CUDA driver
                              ,miniBatchSize = 64 #set to 1 else set to 64 if you have CUDA driver problem 
+                             #,netDefinition = readChar(netDefFile, file.info(netDefFile)$size)
                              ,netDefinition = netDefinition
                              ,optimizer = sgd(learningRate = 0.1, lRateRedRatio = 0.9, lRateRedFreq = 10)
                              )
@@ -157,10 +164,59 @@ model_DNN_GPU <- rxNeuralNet(label ~.
 time_MSFTML_NN <- proc.time() - ptm	
 time_MSFTML_NN <- time_MSFTML_NN[[3]]
 
-time_MSFTML_NN <- 4.673564
-
+# with GPU 
+# time_MSFTML_NN <- 14.673564
+time_MSFTML_NN <-  85.84
+  
 DNN_GPU_score <- rxPredict(model_DNN_GPU, dataTest, extraVarsToWrite = "label")
 rxCrossTabs(formula = ~F(label):PredictLabel, data=DNN_GPU_score)
+
+# Accuracy
+sum(Score_DNN$Label == DNN_GPU_score$PredictedLabel)/dim(DNN_GPU_score)[1]
+
+
+# ---------------
+# without GPU
+# ---------------
+
+#netDefFile <- system.file("demoScripts/mnist.nn", package = "MicrosoftML")
+#source(system.file("extdata/mnist.R", package = "MicrosoftML"))
+
+mnist <- getMnistData(download = TRUE, sampleDataDir = NULL, createDir = TRUE)
+mnistTrain <- mnist$mnistTrain
+mnistTest <- mnist$mnistTest
+
+#start time
+ptm <- proc.time()
+
+
+# multiClass with rxNeuralNet
+Model_DNN <- rxNeuralNet(Label ~ .
+                       ,data = mnistTrain
+                       ,numIterations = 10
+                       ,normalize = "no"
+                       ,optimizer = sgd(learningRate=0.1, lRateRedRatio=0.9, lRateRedFreq=10)
+                       #,netDefinition = readChar(netDefFile, file.info(netDefFile)$size)
+                       ,netDefinition = netDefinition
+                       ,type = "multi")
+
+#end time
+time_MSFTML_NN_NoGPU <- proc.time() - ptm	
+time_MSFTML_NN_NoGPU <- time_MSFTML_NN_NoGPU[[3]]
+
+time_MSFTML_NN_NoGPU <- 125.11
+
+Score_DNN <- rxPredict(Model_DNN, mnistTest, extraVarsToWrite = "Label")
+
+
+rxCrossTabs(formula = ~ F(Label):PredictedLabel, data = Score_DNN)
+
+# Show the (micro-)accuracy
+sum(Score_DNN$Label == Score_DNN$PredictedLabel)/dim(Score_DNN)[1]
+# [1] 0.9767
+
+
+
 
 
 
@@ -206,13 +262,32 @@ time_h20DL <- proc.time() - ptm
 time_h20DL <- time_h20DL[[3]]
 
 
-time_h20DL <- 112.01
+time_h20DL <- 142.01
 
 # success rate matrix
 h2o.confusionMatrix(model_h20)
 
 #exit the h20
 h2o.shutdown()
+
+
+# --------------------
+# Comparison
+# --------------------
+
+Compare_NN<- data.frame(
+                      method=c('ML_NN_GPU','ML_NN_Non_GPU','H2o','XGBoost'), 
+                      TrainTime = c(time_MSFTML_NN,time_MSFTML_NN_NoGPU, time_h20DL, time_xgb_NN)
+                      )
+
+
+
+
+ggplot(Compare_NN,aes(x=method,y=TrainTime, fill=method))+
+  geom_bar(stat='identity')+
+  ggtitle('NeuralNetwork Digit recognizer train time comparison') 
+
+
 
 
 
@@ -228,26 +303,20 @@ library(Matrix)
 library(xgboost)
 
 
-# read training and testing datasets
+# data preparation
 TRAIN <- read.csv("../input/train.csv")
 TEST <- read.csv("../input/test.csv")
-
-# separate multi-level, categorical response variable ("label") from the remaining predictor variables in the training dataset ("TRAIN")
 LABEL <- TRAIN$label
 TRAIN$label <- NULL
-
-# find and remove vectors that are linear combinations of other vectors
 LINCOMB <- findLinearCombos(TRAIN)
 TRAIN <- TRAIN[, -LINCOMB$remove]
 TEST <- TEST[, -LINCOMB$remove]
-
-# find and remove vectors with near-zero variance
 NZV <- nearZeroVar(TRAIN, saveMetrics = TRUE)
 TRAIN <- TRAIN[, -which(NZV[1:nrow(NZV),]$nzv == TRUE)]
 TEST <- TEST[, -which(NZV[1:nrow(NZV),]$nzv == TRUE)]
-
-# re-attach response variable ("LABEL") to training dataset ("TRAIN")
 TRAIN$LABEL <- LABEL
+
+
 
 # define xgb.train parameters
 PARAM <- list(
@@ -272,12 +341,14 @@ PARAM <- list(
   eval_metric        = "merror"           # default = "rmes"
 )
 
+
 # convert TRAIN dataframe into a design matrix
 TRAIN_SMM <- sparse.model.matrix(LABEL ~ ., data = TRAIN)
 TRAIN_XGB <- xgb.DMatrix(data = TRAIN_SMM, label = LABEL)
 
-# set seed
-set.seed(1)
+
+#start time
+ptm <- proc.time()
 
 # train xgb model
 MODEL <- xgb.train(params      = PARAM, 
@@ -287,7 +358,15 @@ MODEL <- xgb.train(params      = PARAM,
                    watchlist   = list(TRAIN_SMM = TRAIN_XGB)
 )
 
-# attach a predictions vector to the test dataset
+#end time
+time_xgb_NN <- proc.time() - ptm	
+time_xgb_NN <- time_xgb_NN[[3]]
+
+time_xgb_NN <- 251.52
+
+
+
+
 TEST$LABEL <- 0
 
 # use the trained xgb model ("MODEL") on the test data ("TEST") to predict the response variable ("LABEL")
