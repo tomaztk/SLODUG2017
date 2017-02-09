@@ -116,6 +116,7 @@ time_CRT <- time_CRT[[3]]
 ##Stochastic Gradient Boosting  (rxBTrees)
 #---------------------------------------------
 
+# DON'T RUN AT PRESENTATION
 #start time
 ptm <- proc.time()
 
@@ -127,7 +128,7 @@ logloss_GBT<-MultiLogLoss(y_true = train$species, y_pred = as.matrix(pred_GBT))
 time_GBT <- proc.time() - ptm	
 
 logloss_GBT <- 2.6467047565207934
-time_GBT <- 1905.21
+time_GBT <- 3405.21
 
 #-----------------------------------------------------------
 ##Classification and Regression Decision Forests (rxDForest)
